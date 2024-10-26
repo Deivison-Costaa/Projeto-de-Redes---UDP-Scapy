@@ -1,20 +1,18 @@
-#from socket import*
 import random
-import struct
 from scapy.all import *
-#import socket
+import socket
 
-#client_socket = socket(AF_INET, SOCK_DGRAM)
+def obter_ip():
+    try:
+        # Cria um socket UDP (não precisa estar conectado à Internet)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Conecta a um endereço IP (pode ser um servidor público)
+        s.connect(("8.8.8.8", 80))  # Usando o DNS do Google como exemplo
+        ip = s.getsockname()[0]  # Obtém o endereço IP local
+    finally:
+        s.close()  # Fecha o socket
+    return ip
 
-# def ip_local():
-#     try:
-#         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-#         s.connect("10.255.255.255", 1)
-#         ip = s.getsockname()[0]
-#         s.close()
-#         return ip
-#     except Exception as e:
-#         return f"Erro ao obter IP: {e}"
 
 
 def ip_para_ints(ip_str):
@@ -35,35 +33,39 @@ def ip_para_ints(ip_str):
 
 def calcular_checksum(UDP, IP, pacote):
     soma = sum(UDP.values()) + IP['proto'] + IP['len'] #soma os valores fixos
-    print(bin(soma) + " " + hex(soma))
+    #print("SOMA 1: ",bin(soma) + " " + hex(soma))
     
     ip_src_s, ip_src_ms = ip_para_ints(IP['src'])
     ip_dst_s, ip_dst_ms = ip_para_ints(IP['dst'])
     
-    print(ip_src_s + ip_src_ms + ip_dst_s + ip_dst_ms)
+    #print("IPSRCmais: ", bin(ip_src_s))
+    #print("IPSRCmenos: ", bin(ip_src_ms))
+    #print("IPSRCmais: ", bin(ip_dst_s))
+    #print("IPSRCmenos: ", bin(ip_dst_ms))
     
     soma += ip_src_s + ip_src_ms + ip_dst_s + ip_dst_ms # soma os ips
     
-    print(soma)
-    print(hex(pacote) + " " + bin(pacote))
+    #print(soma)
+
+    #print("Pacote:", hex(pacote) + " " + bin(pacote))
     
     pacote = pacote << 8  # Desloca 8 bits para a esquerda
     bma_s = (pacote >> 16) & 0xFFFF
     bme_s = pacote & 0xFFFF
     
-    print(f"{bin(bma_s)}  :  {bin(bme_s)}")
+    #print("Pacote SBS",f"{bin(bma_s)}  :  {bin(bme_s)}")
     
     soma += bma_s + bme_s #soma os pacotes
     
-    print(bin(soma))
+    #print(bin(soma))
     
     while soma >> 16:  # Enquanto houver overflow (desloca 16 bits a direita)
         soma = (soma & 0xFFFF) + (soma >> 16) #soma os 16 bits menos significativos com os bits alem de 16 bits
     
-    print(bin(soma))
+    #print(bin(soma))
     
     soma = ~soma & 0xFFFF
-    print(bin(soma))
+    #print("INICIO\n",bin(soma),"\nFIM\n")
     
     return soma
     
@@ -73,23 +75,22 @@ def criar_mensagem(tipo, identificador_resposta):
     mensagem =  (tipo << 16) | identificador_resposta # Criando a mensagem de 24 bits
     
     # 4 bits para o req/res, 4 bits para o tipo e 16 bits para o identificador
-    print(hex(mensagem))
+    #print(hex(mensagem))
     return mensagem
 
 def enviar_mensagem(tipo):
     identificador_mensagem = random.randint(1, 65535)
     mensagem = criar_mensagem(tipo, identificador_mensagem)
-    print(bin(mensagem))
     
     UDP_kanxa = {
-        'dport':  50001, #random.randint(45000, 55000),
-        'sport': 50000,
+        'dport':  50000,
+        'sport': random.randint(45000,55000),
         'len': 11,
         'chksum': 0
     }
     
     IP_kanxa = {
-        'src': "192.168.1.105",
+        'src': obter_ip(),
         'dst': "15.228.191.109",
         'proto': 17,
         'len': 11
@@ -97,36 +98,31 @@ def enviar_mensagem(tipo):
     
     UDP_kanxa['chksum'] = calcular_checksum(UDP_kanxa, IP_kanxa, mensagem)
     print(UDP_kanxa['chksum'])
-    
-    pacote = IP(dst= IP_kanxa['dst']) / UDP(sport= UDP_kanxa['sport'], dport=UDP_kanxa['dport'], len=UDP_kanxa['len'], chksum=UDP_kanxa['chksum']) / Raw(load=mensagem)
-    
-    resposta = sr1(pacote)
-    
-    resposta_mensagem(resposta, identificador_mensagem)
+    mensagem_bytes = mensagem.to_bytes(3, byteorder='big')
+    pacote = IP(dst= IP_kanxa['dst']) / UDP(sport= UDP_kanxa['sport'], dport=UDP_kanxa['dport'], len=UDP_kanxa['len'], chksum=UDP_kanxa['chksum']) / Raw(load=mensagem_bytes)
+    resposta = sr1(pacote, timeout=2)
+    if resposta:
+        resposta_mensagem(resposta, identificador_mensagem)
+    else:
+        print("Nenhuma resposta recebida (timeout)\n")
     
     
 
 def resposta_mensagem(mensagem, identificador_mensagem):
-    cabecalho = struct.unpack('>3B', mensagem[:3]) # 3 bytes do cabeçalho
-    tipo_resposta = (cabecalho[0] & 0b00001111) # and bit a bit para pegar apenas os 4 bits referentes ao tipo
-    identificador_resposta = (cabecalho[1] << 8) | cabecalho[2]  # Identificador de 2 bytes
-    tamanho_resposta = mensagem[3]
-    
-    if identificador_mensagem == identificador_resposta: #ve se o identificador bate
-        match tipo_resposta:
-            case 0:
-                conteudo_resposta = mensagem[4:4 + tamanho_resposta].decode()
-                print(conteudo_resposta)
-            case 1:
-                conteudo_resposta = mensagem[4:4 + tamanho_resposta].decode()
-                print(conteudo_resposta)
-            case 2:
-                conteudo_resposta = mensagem[4:4 + tamanho_resposta]
-                print(int.from_bytes(conteudo_resposta, byteorder='big'))
-            case _:
-                print("Resposta inválida")
-    
+    mensagem = mensagem[Raw].load
 
+    if mensagem[0] == 16:
+        mensagem = mensagem[4:28].decode()
+        print(mensagem)
+    elif mensagem[0] == 17:
+        mensagem = mensagem[4:].decode()
+        print(mensagem)
+    elif mensagem[0] == 18:
+        mensagem = int.from_bytes(mensagem[4:], byteorder="big")
+        print(mensagem)
+    else:
+        print("Erro")
+    
 def cliente():
 
     while True:
